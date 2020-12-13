@@ -1,0 +1,4 @@
+JACK-Client
+matplotlib
+pandas
+scipy

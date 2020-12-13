@@ -1,0 +1,32 @@
+                    _       _                     _   _
+                   | |     | |                   | | | |
+                   | | __ _| |__  ___ _   _ _ __ | |_| |__
+                   | |/ _` | '_ \/ __| | | | '_ \| __| '_ \
+                   | | (_| | |_) \__ \ |_| | | | | |_| | | |
+                   |_|\__,_|_.__/|___/\__, |_| |_|\__|_| |_|
+                    __________________ __/ |_______________
+                   |__________________|___/________________|
+
+labsynth
+Additive synthesizer for MILAB2 university course
+
+
+Introduction
+------------
+
+labsynth receives MIDI data and generates audio for JACK. It is a simple
+additive synthesizer, generating harmonic waveforms. The amplitudes for the
+partials can be configured in various ways with MIDI CC.
+
+This synthesizer is heavily based on the "Simple MIDI Synth (NumPy Edition)"
+example program from the JACK-Client Python library.
+
+
+Create a virtual environment
+----------------------------
+
+To prepare a virtual environment with all requirements for labsynth:
+
+    $ virtualenv labsynth-environment
+    $ . labsynth-environment/bin/activate
+    $ python -m pip install -r requirements.txt
