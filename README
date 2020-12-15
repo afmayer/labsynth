@@ -22,6 +22,13 @@ This synthesizer is heavily based on the "Simple MIDI Synth (NumPy Edition)"
 example program from the JACK-Client Python library.
 
 
+I/O
+---
+
+The synthesizer creates two audio outputs (for stereo) and one MIDI input. These
+JACK ports must be connected to other programs to make use of labsynth.
+
+
 Create a virtual environment
 ----------------------------
 
@@ -30,3 +37,28 @@ To prepare a virtual environment with all requirements for labsynth:
     $ virtualenv labsynth-environment
     $ . labsynth-environment/bin/activate
     $ python -m pip install -r requirements.txt
+
+
+CC parameters
+-------------
+
+The synthesizer changes its sound according to MIDI CC values. The following
+parameters are supported:
+
+  7 VOLUME       Changes the output volume. 100 means 0.0 dB.
+ 10 PAN          Pan the output to the left or right. Value 63 means centered.
+ 20 ATTACK-TIME  ADSR attack time (maximum 1 second)
+ 21 DECAY-TIME   ADSR decay time (maximum 1 second)
+ 22 SUSTAIN-LEV  ADSR sustain level relative to maximum velocity
+ 23 RELEASE-TIME ADSR release time after note off (maximum 1 second)
+ 24 PARTIALS     Number of partials to render (a setting of 0 will yield 1)
+
+CC parameter numbers can be remapped with command-line options. Use
+"labsynth.py --help" to get information about remappable CC parameters.
+
+
+Tuning
+------
+
+The synthesier can be tuned to a different frequency for A4 (default 440 Hz).
+For this, the --tune command-line option has to be used.
