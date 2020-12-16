@@ -279,7 +279,8 @@ def jack_process(jack_blocksize):
     buffer_left.fill(0)
     buffer_right.fill(0)
     render_array = np.zeros(jack_blocksize)
-    times = (np.arange(jack_blocksize) + last_frame_time) / jack_sr
+    times = np.arange(last_frame_time, last_frame_time +
+                      jack_blocksize) / jack_sr
     attack_samples = int(jack_sr * param_attack_time)
     decay_samples = int(jack_sr * param_decay_time)
     release_samples = int(jack_sr * param_release_time)
@@ -298,7 +299,7 @@ def jack_process(jack_blocksize):
             if completed:
                 voice_data[midi_pitch] = (env_array, start_time, 0)
 
-        render_voice(render_array, midi_pitch, times - start_time)
+        render_voice(render_array, midi_pitch, times - start_time / jack_sr)
         buffer_left += render_array * env_array * param_pan_left * param_volume
         buffer_right += (render_array * env_array * param_pan_right *
                          param_volume)
