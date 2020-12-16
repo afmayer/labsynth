@@ -154,7 +154,7 @@ def generate_ads_envelope(env_array, start_offset, velocity, attack_samples,
 
     Arguments:
     env_array      - array for envelope values (changed in-place)
-    start_offset   - start envelope generation at sample (0 is the beginning)
+    start_offset   - number of samples since start of envelope
     velocity       - maximum velocity after attack (0.0 - 1.0)
     attack_samples - number of samples before maximum velocity is reached
     decay_samples  - number of samples for decay time
@@ -193,14 +193,12 @@ def generate_ads_envelope(env_array, start_offset, velocity, attack_samples,
             env_array[pos:pos+num_samples] = velocity * sustain_factor
         pos = pos + num_samples
 
-def generate_release_envelope(env_array, start_offset, velocity,
-                              release_samples):
+def generate_release_envelope(env_array, start_offset, release_samples):
     """Generate an envelope for the release phase of ADSR.
 
     Arguments:
     env_array       - array for envelope values (changed in-place)
-    start_offset    - start envelope generation at sample (0 is the beginning)
-    velocity        - sustain level velocity (0.0 - 1.0)
+    start_offset    - number of samples since start of envelope
     release_samples - number of samples for release time
     """
     completed = False
@@ -211,10 +209,9 @@ def generate_release_envelope(env_array, start_offset, velocity,
         current_offset = start_offset + pos
         if current_offset < release_samples:
             num_samples = min(release_samples - current_offset, remaining)
-            startval = velocity * (1 - (current_offset / release_samples))
-            startval = velocity * (1 - (current_offset / release_samples))
-            targetval = velocity * (1 - ((current_offset + num_samples) /
-                                    release_samples))
+            startval = 1 - (current_offset / release_samples)
+            startval = 1 - (current_offset / release_samples)
+            targetval = 1 - ((current_offset + num_samples) / release_samples)
             env_array[pos:pos+num_samples] = np.linspace(startval, targetval,
                                                          num=num_samples)
         else:
@@ -241,7 +238,7 @@ def samplerate(samplerate):
 @jack_client.set_process_callback
 def jack_process(jack_blocksize):
     """Do the work to be done in the JACK process callback."""
-    last_frame_time = jack_client.last_frame_time
+    now_samples = jack_client.last_frame_time
 
     # process incoming MIDI messages (notes, CC)
     for time, midi_data in midi_in_port.incoming_midi_events():
@@ -260,18 +257,19 @@ def jack_process(jack_blocksize):
             set_cc(midi_bytes[1], midi_bytes[2])
         elif command == MIDI_CMD_NOTEON and velocity != 0:
             try:
-                env_array, _, _ = voice_data[midi_pitch]
+                env_array, _, _, _ = voice_data[midi_pitch]
             except KeyError:
                 env_array = np.zeros(jack_blocksize)
-            voice_data[midi_pitch] = (env_array, last_frame_time,
+            voice_data[midi_pitch] = (env_array, now_samples, -1,
                                       velocity / 127)
         elif command == MIDI_CMD_NOTEOFF or command == MIDI_CMD_NOTEON:
             try:
-                env_array, _, old_velocity = voice_data[midi_pitch]
+                env_array, start_time, _, old_velocity = voice_data[midi_pitch]
             except KeyError:
                 continue
-            # store a negative start time to indicate release phase
-            voice_data[midi_pitch] = (env_array, -last_frame_time, old_velocity)
+            # store current time as the beginning of the release slope
+            voice_data[midi_pitch] = (env_array, start_time, now_samples,
+                                      old_velocity)
 
     # generate audio
     buffer_left = audio_out_port_l.get_array()
@@ -279,25 +277,26 @@ def jack_process(jack_blocksize):
     buffer_left.fill(0)
     buffer_right.fill(0)
     render_array = np.zeros(jack_blocksize)
-    times = np.arange(last_frame_time, last_frame_time +
-                      jack_blocksize) / jack_sr
+    release_env_array = np.zeros(jack_blocksize)
+    times = np.arange(now_samples, now_samples + jack_blocksize) / jack_sr
     attack_samples = int(jack_sr * param_attack_time)
     decay_samples = int(jack_sr * param_decay_time)
     release_samples = int(jack_sr * param_release_time)
 
-    for midi_pitch, (env_array, start_time, velocity) in voice_data.items():
-        if (start_time >= 0):
-            generate_ads_envelope(env_array, last_frame_time - start_time,
-                                  velocity, attack_samples, decay_samples,
-                                  param_sustain_level)
-        else:
-            start_time = -start_time
-            completed = generate_release_envelope(env_array, last_frame_time -
-                                                  start_time, velocity *
-                                                  param_sustain_level,
+    for midi_pitch, (env_array, start_time, note_off_time,
+                     velocity) in voice_data.items():
+        generate_ads_envelope(env_array, now_samples - start_time, velocity,
+                              attack_samples, decay_samples,
+                              param_sustain_level)
+        if note_off_time >= 0:
+            completed = generate_release_envelope(release_env_array,
+                                                  now_samples - note_off_time,
                                                   release_samples)
+            env_array = env_array * release_env_array
             if completed:
-                voice_data[midi_pitch] = (env_array, start_time, 0)
+                # store a velocity of 0 to indicate this voice can be deleted
+                voice_data[midi_pitch] = (env_array, start_time,
+                                          note_off_time, 0)
 
         render_voice(render_array, midi_pitch, times - start_time / jack_sr)
         buffer_left += render_array * env_array * param_pan_left * param_volume
@@ -306,7 +305,7 @@ def jack_process(jack_blocksize):
 
     # remove outdated voices
     for midi_pitch in list(voice_data):
-        _, _, velocity = voice_data[midi_pitch]
+        _, _, _, velocity = voice_data[midi_pitch]
         if velocity == 0:
             del voice_data[midi_pitch]
 
