@@ -81,6 +81,9 @@ arg_parser.add_argument("--tune",
 arg_parser.add_argument("--dump-midi",
                         help="enable MIDI dump",
                         action="store_true")
+arg_parser.add_argument("--dump-parameters",
+                        help="continuously show parameters on console",
+                        action="store_true")
 args = arg_parser.parse_args()
 
 # initialize globals: JACK client stuff
@@ -105,6 +108,16 @@ param_decay_time = 0.0
 param_sustain_level = 1.0
 param_release_time = 0.0
 param_num_of_partials = 1
+
+def dump_parameters():
+    """Clear console screen and dump human-readable parameters."""
+    print("\x1b[2J\x1b[H")
+    print("   Volume: {}\n    Pan-L: {}\n    Pan-R: {}\n".format(param_volume,
+                param_pan_left, param_pan_right))
+    print("   Attack: {}\n    Decay: {}\n  Sustain: {}\n  Release: {}\n".format(
+                param_attack_time, param_decay_time, param_sustain_level,
+                param_release_time))
+    print(" Partials: {}\n".format(param_num_of_partials))
 
 def m2f(midi_note):
     """Return the frequency (in Hz) for a given MIDI note value."""
@@ -147,6 +160,9 @@ def set_cc(cc, value):
     elif cc == args.cc_partials:
         # minimum is 1 voice
         param_num_of_partials = value if value != 0 else 1
+
+    if args.dump_parameters:
+        dump_parameters()
 
 def generate_ads_envelope(env_array, start_idx, velocity, attack_samples,
                           decay_samples, sustain_factor, slope_start_value):
