@@ -220,12 +220,12 @@ def generate_release_envelope(env_array, start_idx, note_off_idx,
         pos = pos + num_samples
     return completed
 
-def render_voice(buffer_array, midi_pitch, times):
+def render_voice(buffer_array, midi_pitch, times, partial_fn):
     """Render one voice with all its partials."""
     buf = np.zeros(len(buffer_array))
     for n in range(1, param_num_of_partials + 1):
         np.sin(2 * np.pi * m2f(midi_pitch) * n * times, out=buf)
-        buffer_array += buf * (1 / n**2)
+        buffer_array += buf * partial_fn(n)
 
 @jack_client.set_samplerate_callback
 def samplerate(samplerate):
@@ -302,7 +302,8 @@ def jack_process(jack_blocksize):
                 voice_data[midi_pitch] = (env_array, start_time, note_off_time,
                                           slope_start_value, 0)
 
-        render_voice(render_array, midi_pitch, times - start_time / jack_sr)
+        render_voice(render_array, midi_pitch, times - start_time / jack_sr,
+                     lambda x: (1 / x**2))
         buffer_left += render_array * env_array * param_pan_left * param_volume
         buffer_right += (render_array * env_array * param_pan_right *
                          param_volume)
