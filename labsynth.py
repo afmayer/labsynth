@@ -148,72 +148,71 @@ def set_cc(cc, value):
         # minimum is 1 voice
         param_num_of_partials = value if value != 0 else 1
 
-def generate_ads_envelope(env_array, start_offset, velocity, attack_samples,
-                          decay_samples, sustain_factor):
+def generate_ads_envelope(env_array, start_idx, velocity, attack_samples,
+                          decay_samples, sustain_factor, slope_start_value):
     """Generate an envelope for attack, decay and sustain phase of ADSR.
 
     Arguments:
     env_array      - array for envelope values (changed in-place)
-    start_offset   - number of samples since start of envelope
+    start_idx      - number of samples since start of envelope
     velocity       - maximum velocity after attack (0.0 - 1.0)
     attack_samples - number of samples before maximum velocity is reached
     decay_samples  - number of samples for decay time
     sustain_factor - sustain level relative to maximum velocity (0.0 - 1.0)
+    slope_start_value - assume value at start_idx and continue slope from there
     """
     pos = 0
     blocksize = len(env_array)
     while pos < blocksize:
         remaining = blocksize - pos
-        current_offset = start_offset + pos
+        current_offset = start_idx + pos
         if current_offset < attack_samples:
             # attack phase
+            slope = np.linspace(slope_start_value, velocity, num=attack_samples)
             num_samples = min(attack_samples - current_offset, remaining)
-            startval = velocity * (current_offset / attack_samples)
-            targetval = velocity * ((current_offset + num_samples)
-                                    / attack_samples)
-            env_array[pos:pos+num_samples] = np.linspace(startval, targetval,
-                                                         num=num_samples)
+            first_idx = current_offset
+            last_idx = current_offset + num_samples
+            env_array[pos:pos+num_samples] = slope[first_idx:last_idx]
         elif current_offset >= attack_samples and current_offset < (
                         attack_samples + decay_samples):
             # decay phase
+            slope = np.linspace(velocity, velocity * sustain_factor,
+                                num=decay_samples)
             num_samples = min(attack_samples + decay_samples - current_offset,
                               remaining)
-            if attack_samples == 0:
-                startval = velocity
-            else:
-                startval = velocity * (1 - (current_offset - attack_samples) /
-                                       (attack_samples + decay_samples))
-            targetval = velocity * sustain_factor * ((current_offset +
-                        num_samples) / (attack_samples + decay_samples))
-            env_array[pos:pos+num_samples] = np.linspace(startval, targetval,
-                                                         num=num_samples)
+            first_idx = current_offset - attack_samples
+            last_idx = current_offset + num_samples - attack_samples
+            env_array[pos:pos+num_samples] = slope[first_idx:last_idx]
         else:
             # sustain phase
             num_samples = remaining
             env_array[pos:pos+num_samples] = velocity * sustain_factor
         pos = pos + num_samples
 
-def generate_release_envelope(env_array, start_offset, release_samples):
+def generate_release_envelope(env_array, start_idx, note_off_idx,
+                              release_samples, slope_start_value):
     """Generate an envelope for the release phase of ADSR.
 
     Arguments:
     env_array       - array for envelope values (changed in-place)
-    start_offset    - number of samples since start of envelope
+    start_idx       - number of samples since start of envelope
+    note_off_idx    - number of samples since NOTE_OFF
     release_samples - number of samples for release time
+    slope_start_value - assume value at start_idx and continue slope from there
     """
     completed = False
     pos = 0
     blocksize = len(env_array)
     while pos < blocksize:
         remaining = blocksize - pos
-        current_offset = start_offset + pos
-        if current_offset < release_samples:
-            num_samples = min(release_samples - current_offset, remaining)
-            startval = 1 - (current_offset / release_samples)
-            startval = 1 - (current_offset / release_samples)
-            targetval = 1 - ((current_offset + num_samples) / release_samples)
-            env_array[pos:pos+num_samples] = np.linspace(startval, targetval,
-                                                         num=num_samples)
+        current_offset = start_idx + pos
+        if note_off_idx < release_samples:
+            # release phase
+            slope = np.linspace(slope_start_value, 0.0, num=release_samples)
+            num_samples = min(release_samples - note_off_idx, remaining)
+            first_idx = note_off_idx
+            last_idx = note_off_idx + num_samples
+            env_array[pos:pos+num_samples] = slope[first_idx:last_idx]
         else:
             completed = True
             num_samples = remaining
@@ -257,19 +256,21 @@ def jack_process(jack_blocksize):
             set_cc(midi_bytes[1], midi_bytes[2])
         elif command == MIDI_CMD_NOTEON and velocity != 0:
             try:
-                env_array, _, _, _ = voice_data[midi_pitch]
+                env_array, _, _, slope_start_value, _ = voice_data[midi_pitch]
             except KeyError:
                 env_array = np.zeros(jack_blocksize)
-            voice_data[midi_pitch] = (env_array, now_samples, -1,
+                slope_start_value = 0.0
+            voice_data[midi_pitch] = (env_array, now_samples, -1, env_array[-1],
                                       velocity / 127)
         elif command == MIDI_CMD_NOTEOFF or command == MIDI_CMD_NOTEON:
             try:
-                env_array, start_time, _, old_velocity = voice_data[midi_pitch]
+                env_array, start_time, _, slope_start_value, old_velocity = (
+                            voice_data[midi_pitch])
             except KeyError:
                 continue
-            # store current time as the beginning of the release slope
+            # store current time (NOTE_OFF event)
             voice_data[midi_pitch] = (env_array, start_time, now_samples,
-                                      old_velocity)
+                                      env_array[-1], old_velocity)
 
     # generate audio
     buffer_left = audio_out_port_l.get_array()
@@ -277,26 +278,29 @@ def jack_process(jack_blocksize):
     buffer_left.fill(0)
     buffer_right.fill(0)
     render_array = np.zeros(jack_blocksize)
-    release_env_array = np.zeros(jack_blocksize)
     times = np.arange(now_samples, now_samples + jack_blocksize) / jack_sr
     attack_samples = int(jack_sr * param_attack_time)
     decay_samples = int(jack_sr * param_decay_time)
     release_samples = int(jack_sr * param_release_time)
 
-    for midi_pitch, (env_array, start_time, note_off_time,
+    for midi_pitch, (env_array, start_time, note_off_time, slope_start_value,
                      velocity) in voice_data.items():
-        generate_ads_envelope(env_array, now_samples - start_time, velocity,
-                              attack_samples, decay_samples,
-                              param_sustain_level)
-        if note_off_time >= 0:
-            completed = generate_release_envelope(release_env_array,
+        if note_off_time < 0:
+            # voice is in ADS phase of ADSR
+            generate_ads_envelope(env_array, now_samples - start_time,
+                                  velocity, attack_samples, decay_samples,
+                                  param_sustain_level, slope_start_value)
+        else:
+            # voice is in release phase of ADSR
+            completed = generate_release_envelope(env_array,
+                                                  now_samples - start_time,
                                                   now_samples - note_off_time,
-                                                  release_samples)
-            env_array = env_array * release_env_array
+                                                  release_samples,
+                                                  slope_start_value)
             if completed:
                 # store a velocity of 0 to indicate this voice can be deleted
-                voice_data[midi_pitch] = (env_array, start_time,
-                                          note_off_time, 0)
+                voice_data[midi_pitch] = (env_array, start_time, note_off_time,
+                                          slope_start_value, 0)
 
         render_voice(render_array, midi_pitch, times - start_time / jack_sr)
         buffer_left += render_array * env_array * param_pan_left * param_volume
@@ -305,7 +309,7 @@ def jack_process(jack_blocksize):
 
     # remove outdated voices
     for midi_pitch in list(voice_data):
-        _, _, _, velocity = voice_data[midi_pitch]
+        _, _, _, _, velocity = voice_data[midi_pitch]
         if velocity == 0:
             del voice_data[midi_pitch]
 
